@@ -7,141 +7,143 @@ from campy.cameras import unicam
 from campy.utils.utils import QueueKeyboardInterrupt
 
 def OpenWriter(cam_params, queue):
-    try:
-        # p = psutil.Process(os.getpid())
-        # p.nice(psutil.HIGH_PRIORITY_CLASS)#psutil.REALTIME_PRIORITY_CLASS note real-time takes precidence over operating system and can cause the computer to crash if buffers are not being flushed p.nice(psutil.REALTIME_PRIORITY_CLASS)
-        writing = False
-        folder_name = os.path.join(cam_params["videoFolder"], cam_params["cameraName"])
-        file_name = cam_params["videoFilename"]
-        full_file_name = os.path.join(folder_name, file_name)
+    # try:
+    # p = psutil.Process(os.getpid())
+    # p.nice(psutil.HIGH_PRIORITY_CLASS)#psutil.REALTIME_PRIORITY_CLASS note real-time takes precidence over operating system and can cause the computer to crash if buffers are not being flushed p.nice(psutil.REALTIME_PRIORITY_CLASS)
+    print ("Setting parameters to open writer...")
+    writing = False
+    folder_name = os.path.join(cam_params["videoFolder"], cam_params["cameraName"])
+    file_name = cam_params["videoFilename"]
+    full_file_name = os.path.join(folder_name, file_name)
 
-        if not os.path.isdir(folder_name):
-            os.makedirs(folder_name)
-            print("Made directory {}.".format(folder_name))
+    if not os.path.isdir(folder_name):
+        os.makedirs(folder_name)
+        print("Made directory {}.".format(folder_name))
 
-        # Flip blue and red for flir camera input
-        # if cam_params["pixelFormatInput"] == "bayer_bggr8" and cam_params["cameraMake"] == "flir":
-        # 	cam_params["pixelFormatInput"] == "bayer_rggb8"
+    # Flip blue and red for flir camera input
+    # if cam_params["pixelFormatInput"] == "bayer_bggr8" and cam_params["cameraMake"] == "flir":
+    # 	cam_params["pixelFormatInput"] == "bayer_rggb8"
 
-        # Load encoding parameters from cam_params
-        pix_fmt_out = cam_params["pixelFormatOutput"]
-        codec = str(cam_params["codec"])
-        quality = str(cam_params["quality"])
-        preset = str(cam_params["preset"])
-        frameRate = str(cam_params["frameRate"])
-        gpuID = str(cam_params["gpuID"])
+    # Load encoding parameters from cam_params
+    pix_fmt_out = cam_params["pixelFormatOutput"]
+    codec = str(cam_params["codec"])
+    quality = str(cam_params["quality"])
+    preset = str(cam_params["preset"])
+    frameRate = str(cam_params["frameRate"])
+    gpuID = str(cam_params["gpuID"])
 
-        # Load defaults
-        gpu_params = []
+    # Load defaults
+    gpu_params = []
 
-        # CPU compression
-        if cam_params["gpuID"] == -1:
-            print("Opened: {} using CPU to compress the stream.".format(full_file_name))
+    # CPU compression
+    if cam_params["gpuID"] == -1:
+        print("Opened: {} using CPU to compress the stream.".format(full_file_name))
+        if preset == "None":
+            preset = "fast"
+        gpu_params = ["-r:v", frameRate,
+                    "-preset", preset,
+                    "-tune", "fastdecode",
+                    "-crf", quality,
+                    "-bufsize", "20M",
+                    "-maxrate", "10M",
+                    "-bf:v", "4",
+                    "-vsync", "0",]
+        if pix_fmt_out == "rgb0" or pix_fmt_out == "bgr0":
+            pix_fmt_out = "yuv420p"
+        if cam_params["codec"] == "h264":
+            codec = "libx264"
+            gpu_params.append("-x264-params")
+            gpu_params.append("nal-hrd=cbr")
+        elif cam_params["codec"] == "h265":
+            codec = "libx265"
+
+    # GPU compression
+    else:
+        # Nvidia GPU (NVENC) encoder optimized parameters
+        print("Opened: {} using GPU {} to compress the stream.".format(full_file_name, cam_params["gpuID"]))
+        # if cam_params["gpuMake"] == "nvidia":
+        #     if preset == "None":
+        #         preset = "fast"
+        #     gpu_params = ["-r:v", frameRate, # important to play nice with vsync "0"
+        #                 "-preset", preset, # set to "fast", "llhp", or "llhq" for h264 or hevc
+        #                 "-qp", quality,
+        #                 "-bf:v", "0",
+        #                 "-vsync", "0",
+        #                 "-2pass", "0",
+        #                 "-gpu", gpuID,
+        #                 ]
+        #     if cam_params["codec"] == "h264":
+        #         codec = "h264_nvenc"
+        #     elif cam_params["codec"] == "h265":
+        #         codec = "hevc_nvenc"
+        
+        if cam_params["gpuMake"] == "nvidia":
             if preset == "None":
                 preset = "fast"
+            gpu_params = ["-preset", preset, # set to "fast", "llhp", or "llhq" for h264 or hevc
+                        # "-r:v", "10", #frameRate, # important to play nice with vsync "0"
+                        # "-qp", quality,
+                        # "-bf:v", "0",
+                        # "-vsync", "0",
+                        # '-2pass', '1',    # sets two pass encoding to true, slightly slower but gives a much more consistent compression
+                        # '-rc-lookahead', '1024', #important for temporal-aq and 2-pass encoding. Allows for a larger number of frames to look at changes over time and where to assign complexity (complexity roughly equates to video size)
+                        # '-temporal-aq', '1', #can either use temporal-aq or spatial-aq not both. Temporal is better since the frame as a whole changes very little over time. Temporal also uses cuda and 3D cores on gpu
+                        # '-surfaces', '64', #greatly affects temporal-aq can never get this setting perfect with rc-lookahead but ffmpeg adjusts it automatically so it doesn't matter
+                        '-b:v', '60000000' , #the average bitrate, this is what controls are video size
+                        '-maxrate', '100000000' , #the max bitrate, this controls the upper bounds of our video size for a section of frames
+                        '-minrate:v', '50000000', #the min bitrate, this controls the lower bounds of our video size for a section of frames
+                        '-bufsize', '48M', #The buffer is inportant for stabalizing video write and read spead
+                        # '-threads', '16', # we don't need many since we are using gpu encoding, however we need one to handle the stream to the gpu and one or two to handle the -rc-lookahead
+                        # '-pix_fmt', 'yuv420p', #specifies our pixel format. Nvidia doesn't allow for greyscale encoding so we have to encode the video as three colors
+                        "-gpu", gpuID,
+                        ]
+            if cam_params["codec"] == "h264":
+                codec = "h264_nvenc"
+            elif cam_params["codec"] == "h265":
+                codec = "hevc_nvenc"
+
+        # AMD GPU (AMF/VCE) encoder optimized parameters
+        elif cam_params["gpuMake"] == "amd":
+            # Preset not supported by AMF
             gpu_params = ["-r:v", frameRate,
-                        "-preset", preset,
-                        "-tune", "fastdecode",
-                        "-crf", quality,
-                        "-bufsize", "20M",
-                        "-maxrate", "10M",
-                        "-bf:v", "4",
-                        "-vsync", "0",]
+                        "-usage", "lowlatency",
+                        "-rc", "cqp", # constant quantization parameter
+                        "-qp_i", quality,
+                        "-qp_p", quality,
+                        "-qp_b", quality,
+                        "-bf:v", "0",
+                        "-hwaccel", "auto",
+                        "-hwaccel_device", gpuID,]
             if pix_fmt_out == "rgb0" or pix_fmt_out == "bgr0":
                 pix_fmt_out = "yuv420p"
             if cam_params["codec"] == "h264":
-                codec = "libx264"
-                gpu_params.append("-x264-params")
-                gpu_params.append("nal-hrd=cbr")
+                codec = "h264_amf"
             elif cam_params["codec"] == "h265":
-                codec = "libx265"
+                codec = "hevc_amf"
 
-        # GPU compression
-        else:
-            # Nvidia GPU (NVENC) encoder optimized parameters
-            print("Opened: {} using GPU {} to compress the stream.".format(full_file_name, cam_params["gpuID"]))
-            # if cam_params["gpuMake"] == "nvidia":
-            #     if preset == "None":
-            #         preset = "fast"
-            #     gpu_params = ["-r:v", frameRate, # important to play nice with vsync "0"
-            #                 "-preset", preset, # set to "fast", "llhp", or "llhq" for h264 or hevc
-            #                 "-qp", quality,
-            #                 "-bf:v", "0",
-            #                 "-vsync", "0",
-            #                 "-2pass", "0",
-            #                 "-gpu", gpuID,
-            #                 ]
-            #     if cam_params["codec"] == "h264":
-            #         codec = "h264_nvenc"
-            #     elif cam_params["codec"] == "h265":
-            #         codec = "hevc_nvenc"
-            
-            if cam_params["gpuMake"] == "nvidia":
-                if preset == "None":
-                    preset = "fast"
-                gpu_params = ["-preset", preset, # set to "fast", "llhp", or "llhq" for h264 or hevc
-                            # "-r:v", "10", #frameRate, # important to play nice with vsync "0"
-                            # "-qp", quality,
-                            # "-bf:v", "0",
-                            # "-vsync", "0",
-                            # '-2pass', '1',    # sets two pass encoding to true, slightly slower but gives a much more consistent compression
-                            # '-rc-lookahead', '1024', #important for temporal-aq and 2-pass encoding. Allows for a larger number of frames to look at changes over time and where to assign complexity (complexity roughly equates to video size)
-                            # '-temporal-aq', '1', #can either use temporal-aq or spatial-aq not both. Temporal is better since the frame as a whole changes very little over time. Temporal also uses cuda and 3D cores on gpu
-                            # '-surfaces', '64', #greatly affects temporal-aq can never get this setting perfect with rc-lookahead but ffmpeg adjusts it automatically so it doesn't matter
-                            '-b:v', '60000000' , #the average bitrate, this is what controls are video size
-                            '-maxrate', '100000000' , #the max bitrate, this controls the upper bounds of our video size for a section of frames
-                            '-minrate:v', '50000000', #the min bitrate, this controls the lower bounds of our video size for a section of frames
-                            '-bufsize', '48M', #The buffer is inportant for stabalizing video write and read spead
-                            # '-threads', '16', # we don't need many since we are using gpu encoding, however we need one to handle the stream to the gpu and one or two to handle the -rc-lookahead
-                            # '-pix_fmt', 'yuv420p', #specifies our pixel format. Nvidia doesn't allow for greyscale encoding so we have to encode the video as three colors
-                            "-gpu", gpuID,
-                            ]
-                if cam_params["codec"] == "h264":
-                    codec = "h264_nvenc"
-                elif cam_params["codec"] == "h265":
-                    codec = "hevc_nvenc"
+        # Intel iGPU encoder (Quick Sync) optimized parameters				
+        elif cam_params["gpuMake"] == "intel":
+            if preset == "None":
+                preset = "faster"
+            gpu_params = ["-r:v", frameRate,
+                        "-bf:v", "0",
+                        "-preset", preset,
+                        "-q", str(int(quality)+1),]
+            if pix_fmt_out == "rgb0" or pix_fmt_out == "bgr0":
+                pix_fmt_out = "nv12"
+            if cam_params["codec"] == "h264":
+                codec = "h264_qsv"
+            elif cam_params["codec"] == "h265":
+                codec = "hevc_qsv"
 
-            # AMD GPU (AMF/VCE) encoder optimized parameters
-            elif cam_params["gpuMake"] == "amd":
-                # Preset not supported by AMF
-                gpu_params = ["-r:v", frameRate,
-                            "-usage", "lowlatency",
-                            "-rc", "cqp", # constant quantization parameter
-                            "-qp_i", quality,
-                            "-qp_p", quality,
-                            "-qp_b", quality,
-                            "-bf:v", "0",
-                            "-hwaccel", "auto",
-                            "-hwaccel_device", gpuID,]
-                if pix_fmt_out == "rgb0" or pix_fmt_out == "bgr0":
-                    pix_fmt_out = "yuv420p"
-                if cam_params["codec"] == "h264":
-                    codec = "h264_amf"
-                elif cam_params["codec"] == "h265":
-                    codec = "hevc_amf"
-
-            # Intel iGPU encoder (Quick Sync) optimized parameters				
-            elif cam_params["gpuMake"] == "intel":
-                if preset == "None":
-                    preset = "faster"
-                gpu_params = ["-r:v", frameRate,
-                            "-bf:v", "0",
-                            "-preset", preset,
-                            "-q", str(int(quality)+1),]
-                if pix_fmt_out == "rgb0" or pix_fmt_out == "bgr0":
-                    pix_fmt_out = "nv12"
-                if cam_params["codec"] == "h264":
-                    codec = "h264_qsv"
-                elif cam_params["codec"] == "h265":
-                    codec = "hevc_qsv"
-
-    except Exception as e:
-        logging.error("Caught exception at writer.py OpenWriter: {}".format(e))
-        raise
+    # except Exception as e:
+    # logging.error("Caught exception at writer.py OpenWriter: {}".format(e))
+    # raise
 
     # Initialize writer object (imageio-ffmpeg)
     while(True):
         try:
+            print('Trying to open writer')
             writer = write_frames(
                 full_file_name,
                 [cam_params["frameWidth"], cam_params["frameHeight"]], # size [W,H]
@@ -155,6 +157,7 @@ def OpenWriter(cam_params, queue):
                 input_params=["-an"], # "-an" no audio
                 output_params=gpu_params,
                 )
+            print('Writer is open!')
             writer.send(None) # Initialize the generator
             writing = True
             break
@@ -216,6 +219,50 @@ def AuxWriteFramesMainThread(cam_params, writeQueue, stopReadQueue, stopWriteQue
 	time.sleep(1)
 	writer.close()
 
+
+def MPWF_helper(args_bundle):
+    return args_bundle[0], args_bundle[1], args_bundle[2], args_bundle[3]
+
+def MultiProcessedWriteFrames(args_bundle):
+    # Start ffmpeg video writer 
+    cam_params, writeQueue, stopReadQueue, stopWriteQueue = MPWF_helper(args_bundle)
+    writer, writing, readQueue = OpenWriter(cam_params, stopReadQueue)
+    cam = unicam.ImportCam(cam_params["cameraMake"])
+    t = time.time()
+    cc = 0
+    print("Starting Writing ....")
+    with QueueKeyboardInterrupt(readQueue):
+        # Write until interrupted and/or stop message received
+        while(writing):
+            # print("Writing ...")
+            if not writeQueue.empty():
+                # print("WriteQueue present with size: ", len(writeQueue))
+                # print("WriteQueue present with size: ", writeQueue.qsize())
+                if cam_params["printWriteQueue"] and writeQueue.qsize() > cam_params["printWriteQueue"] :
+                    print(cam_params["cameraName"] + " -> " + str(writeQueue.qsize()))
+                # print(time.time() - t)
+                # writeQueue.popleft()
+                # cc = cc+1
+                # if cc > 1000:
+                #     print("Post-pop: ", time.time() - t)
+                #     t = time.time()
+                #     cc = 0
+                # writer.send(cam.GetImageArray(writeQueue.popleft()))
+                # writer.send(writeQueue.popleft())
+                writer.send(writeQueue.get())
+                
+            else:
+                # Once queue is depleted and grabber stops, then stop writing
+                if not stopWriteQueue.empty():
+                    writing = False
+                # Otherwise continue writing
+                time.sleep(0.01)
+
+    # Close up...
+    print("Closing video writer for {}. Please wait...".format(cam_params["cameraName"]))
+    time.sleep(1)
+    writer.close()
+    
 def WriteFrames(cam_params, writeQueue, stopReadQueue, stopWriteQueue):
     # Start ffmpeg video writer 
     writer, writing, readQueue = OpenWriter(cam_params, stopReadQueue)
@@ -225,11 +272,12 @@ def WriteFrames(cam_params, writeQueue, stopReadQueue, stopWriteQueue):
     with QueueKeyboardInterrupt(readQueue):
         # Write until interrupted and/or stop message received
         while(writing):
-            
-            if writeQueue:
-                
-                if cam_params["printWriteQueue"] and len(writeQueue) > cam_params["printWriteQueue"] :
-                    print(cam_params["cameraName"] + " -> " + str(len(writeQueue)))
+            # print("Writing ...")
+            if not writeQueue.empty():
+                # print("WriteQueue present with size: ", len(writeQueue))
+                # print("WriteQueue present with size: ", writeQueue.qsize())
+                if cam_params["printWriteQueue"] and writeQueue.qsize() > cam_params["printWriteQueue"] :
+                    print(cam_params["cameraName"] + " -> " + str(writeQueue.qsize()))
                 # print(time.time() - t)
                 # writeQueue.popleft()
                 # cc = cc+1
@@ -238,13 +286,16 @@ def WriteFrames(cam_params, writeQueue, stopReadQueue, stopWriteQueue):
                 #     t = time.time()
                 #     cc = 0
                 # writer.send(cam.GetImageArray(writeQueue.popleft()))
-                writer.send(writeQueue.popleft())
-                
+                # writer.send(writeQueue.popleft())
+                writer.send(writeQueue.get())
+                # cc += 1
+                # print(cc)
             else:
                 # Once queue is depleted and grabber stops, then stop writing
-                if stopWriteQueue:
+                if not stopWriteQueue.empty():
                     writing = False
                 # Otherwise continue writing
+                # print("Sleeping...")
                 time.sleep(0.01)
 
     # Close up...

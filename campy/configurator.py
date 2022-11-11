@@ -4,6 +4,8 @@
 import os, ast, yaml, time, logging
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from campy.cameras import unicam
+import copy
+import dill
 
 
 def DefaultParams():
@@ -76,40 +78,45 @@ def DefaultParams():
 
 
 def AutoParams(params, default_params):
-	# Handle out of range values (reset to default)
-	range_params = [
-		"numCams",
-		"frameRate",
-		"recTimeInSec",
-		"frameHeight",
-		"frameWidth",
-		"bufferSize",
-		"cameraGain",
-		"cameraExposureTimeInUs",
-		"quality",
-		"chunkLengthInSec",
-		"displayFrameRate",
-		"displayDownsample",
-		]
+    # Handle out of range values (reset to default)
+    range_params = [
+        "numCams",
+        "frameRate",
+        "recTimeInSec",
+        "frameHeight",
+        "frameWidth",
+        "bufferSize",
+        "cameraGain",
+        "cameraExposureTimeInUs",
+        "quality",
+        "chunkLengthInSec",
+        "displayFrameRate",
+        "displayDownsample",
+        ]
 
-	for i in range(len(range_params)):
-		key = range_params[i]
-		default_value = default_params[key]
-		if params[key] <= 0:
-			params[key] = default_value
-			print("{} set to invalid value in config. Setting to default ({})."\
-					.format(key, default_value))
+    for i in range(len(range_params)):
+        key = range_params[i]
+        default_value = default_params[key]
+        if isinstance(params[key], list):
+            if any(item<=0 for item in params[key]):
+                params[key] = [default_value]*len(params[key])
+                print("One or more of list elements in {} set to invalid value in config. Setting all list items to default ({})."\
+                        .format(key, default_value)) 
+        if not isinstance(params[key], list) and params[key] <= 0:
+            params[key] = default_value
+            print("{} set to invalid value in config. Setting to default ({})."\
+                    .format(key, default_value))
 
-	# Handle missing config parameters
-	if "numCams" in params.keys():
-		if "cameraNames" not in params.keys():
-			params["cameraNames"] = ["Camera%s" % n for n in range(params["numCams"])]
-		if "cameraSelection" not in params.keys():
-			params["cameraSelection"] = [n for n in range(params["numCams"])]
-	else:
-		print("Please configure 'numCams' to the number of cameras you want to acquire.")
+    # Handle missing config parameters
+    if "numCams" in params.keys():
+        if "cameraNames" not in params.keys():
+            params["cameraNames"] = ["Camera%s" % n for n in range(params["numCams"])]
+        if "cameraSelection" not in params.keys():
+            params["cameraSelection"] = [n for n in range(params["numCams"])]
+    else:
+        print("Please configure 'numCams' to the number of cameras you want to acquire.")
 
-	return params
+    return params
 
 
 def ConfigureParams():
@@ -126,22 +133,76 @@ def ConfigureParams():
 
 
 def ConfigureCamParams(systems, params, n_cam):
-	# Insert camera-specific metadata from parameters into cam_params dictionary
-	cam_params = params
-	cam_params["n_cam"] = n_cam
-	cam_params["baseFolder"] = os.getcwd()
-	cam_params["cameraName"] = params["cameraNames"][n_cam]
+    # Insert camera-specific metadata from parameters into cam_params dictionary
+    print("Configuring Parameters...")
+    if params is not None:
+        cam_params = params
+    else:
+        cam_params = ConfigureParams()
+    cam_params["n_cam"] = n_cam
+    cam_params["baseFolder"] = os.getcwd()
+    
+    # Setting cameraName, frameHeight, frameWidth, Offset, and Exposure times, cameraGain for each specific camera
+    # This is required so that overhead cameras used can have a higher resolution/exposure time, etc.
+    if params is not None:
+        cam_params["cameraName"] = params["cameraNames"][n_cam]
+        if isinstance(params["frameWidth"], list):
+            cam_params["frameWidth"] = params["frameWidth"][n_cam]
+        if isinstance(params["frameHeight"], list):
+            cam_params["frameHeight"] = params["frameHeight"][n_cam]
+        if isinstance(params["cameraExposureTimeInUs"], list):
+            cam_params["cameraExposureTimeInUs"] = params["cameraExposureTimeInUs"][n_cam]
+        if isinstance(params["cameraGain"], list):
+            cam_params["cameraGain"] = params["cameraGain"][n_cam]
+        if isinstance(params["offsetX"], list):
+            cam_params["offsetX"] = params["offsetX"][n_cam]
+        if isinstance(params["offsetY"], list):
+            cam_params["offsetY"] = params["offsetY"][n_cam]
+        if isinstance(params["avgBitRate"], list):
+            cam_params["avgBitRate"] = params["avgBitRate"][n_cam]
+        if isinstance(params["maxBitRate"], list):
+            cam_params["maxBitRate"] = params["maxBitRate"][n_cam]
+        if isinstance(params["gpuBuffer"], list):
+            cam_params["gpuBuffer"] = params["gpuBuffer"][n_cam]
+    else:
+        cam_params["cameraName"] = cam_params["cameraNames"][n_cam]
+        if isinstance(cam_params["frameWidth"], list):
+            cam_params["frameWidth"] = cam_params["frameWidth"][n_cam]
+        if isinstance(cam_params["frameHeight"], list):
+            cam_params["frameHeight"] = cam_params["frameHeight"][n_cam]
+        if isinstance(cam_params["cameraExposureTimeInUs"], list):
+            cam_params["cameraExposureTimeInUs"] = cam_params["cameraExposureTimeInUs"][n_cam]
+        if isinstance(cam_params["cameraGain"], list):
+            cam_params["cameraGain"] = cam_params["cameraGain"][n_cam]
+        if isinstance(cam_params["offsetX"], list):
+            cam_params["offsetX"] = cam_params["offsetX"][n_cam]
+        if isinstance(cam_params["offsetY"], list):
+            cam_params["offsetY"] = cam_params["offsetY"][n_cam]
+        if isinstance(cam_params["avgBitRate"], list):
+            cam_params["avgBitRate"] = cam_params["avgBitRate"][n_cam]
+        if isinstance(cam_params["maxBitRate"], list):
+            cam_params["maxBitRate"] = cam_params["maxBitRate"][n_cam]
+        if isinstance(cam_params["gpuBuffer"], list):
+            cam_params["gpuBuffer"] = cam_params["gpuBuffer"][n_cam]
+    
 
-	cam_params = OptParams(cam_params)
-	cam_make = cam_params["cameraMake"]
-	cam_idx = cam_params["cameraSelection"]
+    cam_params = OptParams(cam_params)
+    cam_make = cam_params["cameraMake"]
+    cam_idx = cam_params["cameraSelection"]
 
-	cam_params["device"] = systems[cam_make]["deviceList"][cam_idx]
-	cam_params = unicam.LoadDevice(systems, params, cam_params)
+    cam_params["device"] = systems[cam_make]["deviceList"][cam_idx]
+    if params is not None:
+        cam_params = unicam.LoadDevice(systems, params, cam_params)
+    else:
+        cam_params = unicam.LoadDevice(systems, cam_params, cam_params)
 
-	cam_params["cameraSerialNo"] = systems[cam_make]["serials"][cam_idx]
+    cam_params["cameraSerialNo"] = systems[cam_make]["serials"][cam_idx]
+    
+    # print ("cam_params[device] pickles with dill: ", dill.pickles(cam_params["device"], safe = True))
+    # print ("cam_params[camera] pickles with dill: ", dill.pickles(cam_params["camera"], safe = True))
+    print ("Configuring Parameters completed successfully.")
 
-	return cam_params
+    return cam_params
 
 
 def OptParams(cam_params):
@@ -184,13 +245,13 @@ def CheckConfig(params, clargs):
 
 
 def LoadConfig(config_path):
-	try:
-		with open(config_path, "rb") as f:
-			config = yaml.safe_load(f)
-	except Exception as e:
-		logging.error('Caught this error at configurator.py LoadConfig: {}. Check your config path!'.format(e))
-		raise
-	return config
+    try:
+        with open(config_path, "rb") as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        logging.error('Caught this error at configurator.py LoadConfig: {}. Check your config path!'.format(e))
+        raise
+    return config
 
 
 def CombineConfigAndClargs(clargs):

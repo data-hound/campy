@@ -1,0 +1,3 @@
+[submodule "arrayqueues"]
+	path = arrayqueues
+	url = https://github.com/portugueslab/arrayqueues
